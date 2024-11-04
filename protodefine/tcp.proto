@@ -1,0 +1,41 @@
+syntax = "proto3";
+
+//import "github.com/3zheng/railgun/protodefine/mytype/types.proto";
+import "types.proto";
+
+option go_package = "github.com/3zheng/railcommon/protodefine";
+
+package protodefine;
+
+//网络层消息
+
+enum CMDID_Tcp{
+	IDUnknowTp = 0;	//0保留
+	
+	IDTCPTransferMsg = 1;		//TCP消息传输报文
+	IDTCPSessionCome = 2;		//新建了一个TCP会话
+	IDTCPSessionClose = 3;		//关闭了一个TCP会话
+	IDTCPSessionKick = 4;		//主动要求关闭一个TCP会话
+	
+	IDLastTp=100;
+};
+
+
+message	TCPTransferMsg{
+	BaseInfo base = 1; 
+	uint32	data_kind_id = 2;
+	uint32	data_sub_id = 3;
+	bytes	data=4;
+};
+
+message TCPSessionCome{
+	 BaseInfo base = 1; 
+};
+
+message TCPSessionClose{
+	 BaseInfo base = 1; 
+};
+
+message TCPSessionKick{
+	 BaseInfo base = 1; 
+};
