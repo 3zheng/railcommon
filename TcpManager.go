@@ -8,8 +8,8 @@ import (
 	"sync"
 	"sync/atomic"
 
-	protodefine "railcommon/protodefine"
-	railutil "railcommon/util"
+	protodefine "github.com/3zheng/railproto"
+	railutil "github.com/3zheng/railcommon/util"
 
 	proto "google.golang.org/protobuf/proto"
 )

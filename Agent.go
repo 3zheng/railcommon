@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"time"
 
-	"railcommon/protodefine"
+	protodefine "github.com/3zheng/railproto"
 
 	_ "github.com/go-sql-driver/mysql"
 	proto "google.golang.org/protobuf/proto"

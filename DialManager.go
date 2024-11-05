@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"net"
 
-	"railcommon/protodefine"
-	railutil "railcommon/util"
+	"github.com/3zheng/railproto"
+	railutil "github.com/3zheng/railcommon/util"
 
 	proto "google.golang.org/protobuf/proto"
 )

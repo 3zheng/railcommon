@@ -6,7 +6,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"railcommon/protodefine"
+	protodefine "github.com/3zheng/railproto"
 
 	proto "google.golang.org/protobuf/proto"
 )
