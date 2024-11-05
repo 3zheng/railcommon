@@ -3,4 +3,4 @@
 /*
 DialManager document
 */
-package DialManager
+package railcommon

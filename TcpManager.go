@@ -1,5 +1,5 @@
 // TcpManager project TcpManager.go
-package ListenManager
+package railcommon
 
 import (
 	"bytes"
@@ -8,31 +8,32 @@ import (
 	"sync"
 	"sync/atomic"
 
-	bs_proto "github.com/3zheng/railgun/protodefine"
-	bs_tcp "github.com/3zheng/railgun/protodefine/tcpnet"
+	protodefine "railcommon/protodefine"
+	railutil "railcommon/util"
+
 	proto "google.golang.org/protobuf/proto"
 )
 
 var gSessionLock sync.Mutex //gSessionMap的临界区锁
-var gSessionMap map[uint64]*ConnectionSession
+var gSessionMap map[uint64]*ServerConnectionSession
 
 // 服务端的
-type ConnectionSession struct {
+type ServerConnectionSession struct {
 	//	quitWriteCh  chan int                   //通知结束客户端write协程的管道
-	remoteAddr    string                      //对端地址包括ip和port
-	connId        uint64                      //连接标识id
-	tcpConn       *net.TCPConn                //用于发送接收消息的tcp连接实体
-	cache         *bytes.Buffer               //自动扩展的用于粘包处理的缓存区
-	MsgWriteCh    chan *bs_tcp.TCPTransferMsg //从接受来自逻辑层消息的管道
-	wg            sync.WaitGroup              //在close时阻塞等待两个协程结束
-	isWriteClosed int32                       //SendPackege协程是否已经结束的标志位
-	isReadClosed  int32                       //RecvPackege协程是否已经结束的标志位
-	IsSendKickMsg int32                       //MsgPool是否处理了Kick报文或者说是否已经调用了CloseSession的标志位,MsgPool也会访问，所以大写
+	remoteAddr    string                           //对端地址包括ip和port
+	connId        uint64                           //连接标识id
+	tcpConn       *net.TCPConn                     //用于发送接收消息的tcp连接实体
+	cache         *bytes.Buffer                    //自动扩展的用于粘包处理的缓存区
+	MsgWriteCh    chan *protodefine.TCPTransferMsg //从接受来自逻辑层消息的管道
+	wg            sync.WaitGroup                   //在close时阻塞等待两个协程结束
+	isWriteClosed int32                            //SendPackege协程是否已经结束的标志位
+	isReadClosed  int32                            //RecvPackege协程是否已经结束的标志位
+	IsSendKickMsg int32                            //MsgPool是否处理了Kick报文或者说是否已经调用了CloseSession的标志位,MsgPool也会访问，所以大写
 }
 
 // 应对粘包采用的数据格式是4个字节的int32类型的length变量作为包头，后续跟上长度为length的包实体
 // 从客户端收消息
-func (session *ConnectionSession) RecvPackege(logicChannel chan proto.Message) {
+func (session *ServerConnectionSession) RecvPackege(logicChannel chan proto.Message) {
 	data := make([]byte, 1024) //1024字节为一个数据片
 	//(*session).cache.
 	//不停的读取客户端发来的信息
@@ -41,20 +42,20 @@ func (session *ConnectionSession) RecvPackege(logicChannel chan proto.Message) {
 		if err != nil {
 			fmt.Println("读取客户端数据错误:", err.Error())
 			//向主线程发送TCPSessionKick报文让主线程来关闭SendPackege协程
-			kick := new(bs_tcp.TCPSessionKick)
-			bs_proto.SetBaseKindAndSubId(kick) //目前只set了kind_id和sub_id
+			kick := new(protodefine.TCPSessionKick)
+			protodefine.SetBaseKindAndSubId(kick) //目前只set了kind_id和sub_id
 			kick.Base.ConnId = session.connId
 			logicChannel <- kick //通知主线程发送断开当前session
 			break                //跳出for循环
 		} else {
 			buff := data[:dataLength] //指示有效数据长度
-			validBuff := DecodePackage(session.cache, buff)
+			validBuff := railutil.DecodePackage(session.cache, buff)
 			if validBuff == nil {
 				continue //报文体没有收完整，还需要继续read
 			}
-			protoMsg := new(bs_tcp.TCPTransferMsg)
+			protoMsg := new(protodefine.TCPTransferMsg)
 			err := proto.Unmarshal(validBuff, protoMsg)
-			bs_proto.SetBaseKindAndSubId(protoMsg) //目前只set了kind_id和sub_id，从客户端发来的base可能为nil,Unmarshal后要重新赋值
+			protodefine.SetBaseKindAndSubId(protoMsg) //目前只set了kind_id和sub_id，从客户端发来的base可能为nil,Unmarshal后要重新赋值
 			if err != nil {
 				fmt.Println("反序列化TCPTransferMsg报文出错，无法解析validBuff, err=", err.Error())
 				//可能消息出错了清空cache
@@ -74,7 +75,7 @@ func (session *ConnectionSession) RecvPackege(logicChannel chan proto.Message) {
 }
 
 // 向客户端发消息
-func (session *ConnectionSession) SendPackege(logicChannel chan proto.Message) {
+func (session *ServerConnectionSession) SendPackege(logicChannel chan proto.Message) {
 	//等待从逻辑层下发的消息
 	quit := false
 	for {
@@ -89,12 +90,12 @@ func (session *ConnectionSession) SendPackege(logicChannel chan proto.Message) {
 					fmt.Println("序列化TCPTransferMsg报文出错")
 				} else {
 					var pkg *bytes.Buffer = new(bytes.Buffer)
-					EncodePackage(pkg, data) //调用DealStickPkg.go的函数，用于组一个（报文长度+报文）的包
+					railutil.EncodePackage(pkg, data) //调用DealStickPkg.go的函数，用于组一个（报文长度+报文）的包
 					_, err2 := session.tcpConn.Write(pkg.Bytes())
 					if err2 != nil {
 						//向主线程发送TCPSessionKick报文让主线程来关闭RecvPackege协程
-						kick := new(bs_tcp.TCPSessionKick)
-						bs_proto.SetBaseKindAndSubId(kick) //目前只set了kind_id和sub_id
+						kick := new(protodefine.TCPSessionKick)
+						protodefine.SetBaseKindAndSubId(kick) //目前只set了kind_id和sub_id
 						kick.Base.ConnId = session.connId
 						logicChannel <- kick //通知主线程发送断开当前session
 						quit = true
@@ -112,7 +113,7 @@ func (session *ConnectionSession) SendPackege(logicChannel chan proto.Message) {
 }
 
 // CloseSession必须由逻辑层创建协程来调用，因为这里使用了session.wg.Wait()阻塞,而且必须先判断之前是否已经调用了CloseSession，不能调用两次
-func (session *ConnectionSession) CloseSession(logicChannel chan proto.Message) {
+func (session *ServerConnectionSession) CloseSession(logicChannel chan proto.Message) {
 	ret := atomic.CompareAndSwapInt32(&(session.IsSendKickMsg), 0, 1)
 	if !ret {
 		fmt.Println("已经CloseSession被调用了两次，connId=", session.connId)
@@ -132,8 +133,8 @@ func (session *ConnectionSession) CloseSession(logicChannel chan proto.Message) 
 	delete(gSessionMap, session.connId)
 	gSessionLock.Unlock()
 	//向逻辑层发送session关闭的通知
-	msg := new(bs_tcp.TCPSessionClose)
-	bs_proto.SetBaseKindAndSubId(msg)
+	msg := new(protodefine.TCPSessionClose)
+	protodefine.SetBaseKindAndSubId(msg)
 	msg.Base.ConnId = connId
 	logicChannel <- msg
 	fmt.Println("gSessionMap已删除connId=", connId, "的session")
@@ -153,7 +154,7 @@ func CreateSever(ip_address string, logicChannel chan proto.Message) {
 	fmt.Println("已初始化连接，等待客户端连接...")
 	//defer listener.Close()//一直在循环就不要关闭listener了
 	var currentConnId uint64 = 0 //connId计数，当accept了一个客户端，就+1
-	gSessionMap = make(map[uint64]*ConnectionSession)
+	gSessionMap = make(map[uint64]*ServerConnectionSession)
 	//无限循环accept
 	for {
 		tcpConn, err := listener.AcceptTCP()
@@ -163,12 +164,12 @@ func CreateSever(ip_address string, logicChannel chan proto.Message) {
 		}
 		currentConnId += 1
 		fmt.Println("A client connected : ", tcpConn.RemoteAddr().String(), "currentConnId=", currentConnId)
-		session := new(ConnectionSession)
+		session := new(ServerConnectionSession)
 		session.remoteAddr = tcpConn.RemoteAddr().String()
 		session.connId = currentConnId
 		session.tcpConn = tcpConn
 		session.cache = new(bytes.Buffer)
-		session.MsgWriteCh = make(chan *bs_tcp.TCPTransferMsg, 100) //可以存放100个报文
+		session.MsgWriteCh = make(chan *protodefine.TCPTransferMsg, 100) //可以存放100个报文
 		session.isReadClosed = 0
 		session.isWriteClosed = 0
 		session.IsSendKickMsg = 0
@@ -179,8 +180,8 @@ func CreateSever(ip_address string, logicChannel chan proto.Message) {
 		session.wg.Add(2)
 		go session.RecvPackege(logicChannel) //RecvPackege的logicChannel作用1、2都有
 		go session.SendPackege(logicChannel) //SendPackege的logicChannel只有作用1
-		msg := new(bs_tcp.TCPSessionCome)
-		bs_proto.SetBaseKindAndSubId(msg)
+		msg := new(protodefine.TCPSessionCome)
+		protodefine.SetBaseKindAndSubId(msg)
 		msg.Base.ConnId = session.connId
 		msg.Base.RemoteAdd = session.remoteAddr
 		logicChannel <- msg
@@ -188,7 +189,7 @@ func CreateSever(ip_address string, logicChannel chan proto.Message) {
 	}
 }
 
-func GetSessionByConnId(connId uint64) *ConnectionSession {
+func GetSessionByConnId(connId uint64) *ServerConnectionSession {
 	if elem, ok := gSessionMap[connId]; ok == true {
 		return elem
 	} else {

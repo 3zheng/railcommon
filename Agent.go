@@ -1,4 +1,4 @@
-package PoolAndAgent
+package railcommon
 
 import (
 	"database/sql"
@@ -6,12 +6,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/3zheng/railgun/DialManager"
-	ListenManager "github.com/3zheng/railgun/TcpListenManager"
-	bs_proto "github.com/3zheng/railgun/protodefine"
-	bs_types "github.com/3zheng/railgun/protodefine/mytype"
-	bs_router "github.com/3zheng/railgun/protodefine/router"
-	bs_tcp "github.com/3zheng/railgun/protodefine/tcpnet"
+	"railcommon/protodefine"
 
 	_ "github.com/go-sql-driver/mysql"
 	proto "google.golang.org/protobuf/proto"
@@ -23,9 +18,9 @@ type NetAgent struct {
 
 var netAgentList []*NetAgent
 
-func (*NetAgent) SendMsg(req *bs_tcp.TCPTransferMsg) {
+func (*NetAgent) SendMsg(req *protodefine.TCPTransferMsg) {
 	var connId uint64 = req.Base.ConnId
-	sess := ListenManager.GetSessionByConnId(connId)
+	sess := GetSessionByConnId(connId)
 	if sess == nil { //判断是否为空
 		return
 	}
@@ -54,7 +49,7 @@ func CreateNetAgent(ipAdd string) *NetAgent {
 
 type RouterAgent struct {
 	IpAddress   string
-	DialSession *DialManager.ConnectionSession
+	DialSession *ClientConnectionSession
 }
 
 func CreateRouterAgent(ipAdd string) *RouterAgent {
@@ -67,14 +62,14 @@ func CreateRouterAgent(ipAdd string) *RouterAgent {
 func (this *RouterAgent) RunRouterAgent(RouterToLogicChannel chan proto.Message, myAppId uint32, myAppType uint32) {
 	fmt.Println("RunRouterAgent() myAppId=", myAppId, "myAppType=", myAppType)
 	isClosed := false
-	this.DialSession = DialManager.CreateClient(this.IpAddress, RouterToLogicChannel)
+	this.DialSession = CreateClient(this.IpAddress, RouterToLogicChannel)
 	for {
 		//在这个router session关闭后，需要不停的尝试重新连接
 		for isClosed || this.DialSession == nil {
 			select {
 			case <-time.After(700 * time.Millisecond): //每700毫秒尝试重新连接一次
 			}
-			this.DialSession = DialManager.CreateClient(this.IpAddress, RouterToLogicChannel)
+			this.DialSession = CreateClient(this.IpAddress, RouterToLogicChannel)
 			if this.DialSession != nil {
 				//重连成功了
 				fmt.Println("router Agent重连成功了")
@@ -83,19 +78,19 @@ func (this *RouterAgent) RunRouterAgent(RouterToLogicChannel chan proto.Message,
 			}
 		}
 		//连上router后向router发送注册报文
-		req := new(bs_router.RegisterAppReq)
-		bs_proto.SetBaseKindAndSubId(req)
+		req := new(protodefine.RegisterAppReq)
+		protodefine.SetBaseKindAndSubId(req)
 		req.AppType = myAppType
 		req.AppId = myAppId
 		buff, err := proto.Marshal(req)
 		if err != nil {
 			fmt.Println("序列化RegisterAppReq出错")
 		}
-		tcpMsg := new(bs_tcp.TCPTransferMsg)
-		bs_proto.SetBaseKindAndSubId(tcpMsg)
+		tcpMsg := new(protodefine.TCPTransferMsg)
+		protodefine.SetBaseKindAndSubId(tcpMsg)
 		tcpMsg.Data = buff
-		tcpMsg.DataKindId = uint32(bs_types.CMDKindId_IDKindRouter)
-		tcpMsg.DataSubId = uint32(bs_router.CMDID_Router_IDRegisterAppReq)
+		tcpMsg.DataKindId = uint32(protodefine.CMDKindId_IDKindRouter)
+		tcpMsg.DataSubId = uint32(protodefine.CMDID_Router_IDRegisterAppReq)
 		this.SendMsg(tcpMsg)
 		fmt.Println("向router app发送了注册请求")
 		//阻塞在这里直到session关闭
@@ -110,7 +105,7 @@ func (this *RouterAgent) RunRouterAgent(RouterToLogicChannel chan proto.Message,
 	}
 }
 
-func (this *RouterAgent) SendMsg(req *bs_tcp.TCPTransferMsg) {
+func (this *RouterAgent) SendMsg(req *protodefine.TCPTransferMsg) {
 	var connId uint64 = req.Base.ConnId
 	if this.DialSession == nil { //判断是否为空
 		return

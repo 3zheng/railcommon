@@ -1,5 +1,5 @@
 // DialManager project DialManager.go
-package DialManager
+package railcommon
 
 //导入TcpListenManager是为了借用粘包处理的函数
 import (
@@ -7,24 +7,24 @@ import (
 	"fmt"
 	"net"
 
-	serverManger "github.com/3zheng/railgun/TcpListenManager"
+	"railcommon/protodefine"
+	railutil "railcommon/util"
 
-	bs_tcp "github.com/3zheng/railgun/protodefine/tcpnet"
 	proto "google.golang.org/protobuf/proto"
 )
 
 // 作为客户端去连接
 type ClientConnectionSession struct {
 	//	quitWriteCh  chan int                   //通知结束客户端write协程的管道
-	remoteAddr string                      //对端地址包括ip和port
-	connId     uint64                      //连接标识id
-	tcpConn    *net.TCPConn                //用于发送接收消息的tcp连接实体
-	cache      *bytes.Buffer               //自动扩展的用于粘包处理的缓存区
-	MsgWriteCh chan *bs_tcp.TCPTransferMsg //从接受来自逻辑层消息的管道
+	remoteAddr string                           //对端地址包括ip和port
+	connId     uint64                           //连接标识id
+	tcpConn    *net.TCPConn                     //用于发送接收消息的tcp连接实体
+	cache      *bytes.Buffer                    //自动扩展的用于粘包处理的缓存区
+	MsgWriteCh chan *protodefine.TCPTransferMsg //从接受来自逻辑层消息的管道
 	Quit       chan bool
 }
 
-func (session *ConnectionSession) RecvPackege(logicChannel chan proto.Message) {
+func (session *ClientConnectionSession) RecvPackege(logicChannel chan proto.Message) {
 	data := make([]byte, 1024) //1024字节为一个数据片
 	//(*session).cache.
 	//不停的读取对端remote服务器发来的信息
@@ -33,18 +33,18 @@ func (session *ConnectionSession) RecvPackege(logicChannel chan proto.Message) {
 		if err != nil {
 			fmt.Println("TCP读取数据错误:", err.Error())
 			//向MsgWriteCh随意发送一个报文让来结束当前的来SendPackege的MsgWriteCh管道阻塞从而让其conn.send失败而关闭SendPackege协程
-			kick := new(bs_tcp.TCPTransferMsg)
+			kick := new(protodefine.TCPTransferMsg)
 			session.tcpConn.Close()    //关闭TCPCONN
 			session.MsgWriteCh <- kick //让SendPackege结束MsgWriteCh的阻塞
 			session.Quit <- true       //通知主线程连接断开了
 			break                      //跳出for循环
 		} else {
 			buff := data[:dataLength] //指示有效数据长度
-			validBuff := serverManger.DecodePackage(session.cache, buff)
+			validBuff := railutil.DecodePackage(session.cache, buff)
 			if validBuff == nil {
 				continue //报文体没有收完整，还需要继续read
 			}
-			protoMsg := new(bs_tcp.TCPTransferMsg)
+			protoMsg := new(protodefine.TCPTransferMsg)
 			err := proto.Unmarshal(validBuff, protoMsg)
 			if err != nil {
 				fmt.Println("反序列化TCPTransferMsg报文出错，无法解析validBuff, err=", err.Error())
@@ -61,7 +61,7 @@ func (session *ConnectionSession) RecvPackege(logicChannel chan proto.Message) {
 }
 
 // 向客户端发消息
-func (session *ConnectionSession) SendPackege(logicChannel chan proto.Message) {
+func (session *ClientConnectionSession) SendPackege(logicChannel chan proto.Message) {
 	//等待从逻辑层下发的消息
 	quit := false
 	for {
@@ -76,7 +76,7 @@ func (session *ConnectionSession) SendPackege(logicChannel chan proto.Message) {
 					fmt.Println("序列化TCPTransferMsg报文出错")
 				} else {
 					var pkg *bytes.Buffer = new(bytes.Buffer)
-					serverManger.EncodePackage(pkg, data) //调用DealStickPkg.go的函数，用于组一个（报文长度+报文）的包
+					railutil.EncodePackage(pkg, data) //调用DealStickPkg.go的函数，用于组一个（报文长度+报文）的包
 					_, err2 := session.tcpConn.Write(pkg.Bytes())
 					if err2 != nil {
 						//直接tcpConn.close就行了，因为RecvPackege协程是阻塞在read处的，这里close了，read就能得到error异常了
@@ -95,7 +95,7 @@ func (session *ConnectionSession) SendPackege(logicChannel chan proto.Message) {
 	}
 }
 
-func CreateClient(remote_address string, logicChannel chan proto.Message) *ConnectionSession {
+func CreateClient(remote_address string, logicChannel chan proto.Message) *ClientConnectionSession {
 	conn, err := net.Dial("tcp", remote_address)
 	if err != nil {
 		fmt.Println("连接服务端失败:", err.Error())
@@ -111,11 +111,11 @@ func CreateClient(remote_address string, logicChannel chan proto.Message) *Conne
 	}
 
 	fmt.Println("DialManager connected : ", tcpConn.RemoteAddr().String())
-	session := new(ConnectionSession)
+	session := new(ClientConnectionSession)
 	session.remoteAddr = tcpConn.RemoteAddr().String()
 	session.tcpConn = tcpConn
 	session.cache = new(bytes.Buffer)
-	session.MsgWriteCh = make(chan *bs_tcp.TCPTransferMsg, 10000) //可以存放10000个报文
+	session.MsgWriteCh = make(chan *protodefine.TCPTransferMsg, 10000) //可以存放10000个报文
 	session.Quit = make(chan bool)
 	//不需要传递TCPSessionCome给逻辑层，因为这个会话是不需要管理的
 	go session.RecvPackege(logicChannel)

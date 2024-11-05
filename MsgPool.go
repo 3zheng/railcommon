@@ -1,16 +1,13 @@
 // PoolAndAgent project MsgPool.go
-package PoolAndAgent
+package railcommon
 
 import (
 	"fmt"
 	"sync/atomic"
 	"time"
 
-	ListenManager "github.com/3zheng/railgun/TcpListenManager"
-	bs_proto "github.com/3zheng/railgun/protodefine"
-	bs_types "github.com/3zheng/railgun/protodefine/mytype"
-	bs_router "github.com/3zheng/railgun/protodefine/router"
-	bs_tcp "github.com/3zheng/railgun/protodefine/tcpnet"
+	"railcommon/protodefine"
+
 	proto "google.golang.org/protobuf/proto"
 )
 
@@ -44,7 +41,7 @@ func CreateMsgPool(quit chan int, myAppType uint32, myAppId uint32) *SingleMsgPo
 	pool.quit = quit
 	pool.myAppType = myAppType
 	pool.myAppId = myAppId
-	bs_proto.OutputMyLog("CreateMsgPool() myAppType=", myAppType)
+	protodefine.OutputMyLog("CreateMsgPool() myAppType=", myAppType)
 	//fmt.Println("CreateMsgPool() myAppType=", myAppType)
 	return pool
 }
@@ -74,7 +71,7 @@ func (this *SingleMsgPool) InitAndRun(InitMsg proto.Message) bool {
 	//判断有没有绑定netagent，如果有那么要创建相应的tcpManager和NetToLogicChannel
 	if this.bindingNetAgent != nil {
 		this.NetToLogicChannel = make(chan proto.Message, CHANNEL_LENGTH)
-		go ListenManager.CreateSever(this.bindingNetAgent.IpAddress, this.NetToLogicChannel) //创建服务端监听协程
+		go CreateSever(this.bindingNetAgent.IpAddress, this.NetToLogicChannel) //创建服务端监听协程
 	}
 	if this.bindingRouterAgent != nil {
 		this.RouterToLogicChannel = make(chan proto.Message, CHANNEL_LENGTH)
@@ -87,12 +84,12 @@ func (this *SingleMsgPool) InitAndRun(InitMsg proto.Message) bool {
 				select {
 				case v := <-this.NetToLogicChannel: //阻塞读取NetToLogicChannel,来自NetToLogicChannel的报文都在属于tcp.proto
 					switch data := v.(type) {
-					case *bs_tcp.TCPSessionKick: //来自NetToLogicChannel的kick报文要做特殊处理，不上传给logic层
-						sess := ListenManager.GetSessionByConnId(data.Base.ConnId)
+					case *protodefine.TCPSessionKick: //来自NetToLogicChannel的kick报文要做特殊处理，不上传给logic层
+						sess := GetSessionByConnId(data.Base.ConnId)
 						if sess != nil && atomic.LoadInt32(&(sess.IsSendKickMsg)) == 0 { //原子操作，判断sess.IsSendKickMsg == 0
 							go sess.CloseSession(this.NetToLogicChannel) //关闭此session
 						}
-					case *bs_tcp.TCPSessionCome:
+					case *protodefine.TCPSessionCome:
 						fmt.Println("收到了TCPSessionCome报文，base=", data.Base)
 						fmt.Println("NetToLogicChannel转发给PoolToLogicChannel")
 						select {
@@ -119,29 +116,29 @@ func (this *SingleMsgPool) InitAndRun(InitMsg proto.Message) bool {
 				select {
 				case v := <-this.RouterToLogicChannel: //阻塞读取RouterToLogicChannel,来自RouterToLogicChannel的报文都在router.proto
 					switch data := v.(type) {
-					case *bs_tcp.TCPSessionKick: //来自routerAgent的报文kick,come,close报文都是无意义的
+					case *protodefine.TCPSessionKick: //来自routerAgent的报文kick,come,close报文都是无意义的
 						fmt.Println("收到了无意义的TCPSessionKick报文")
-					case *bs_tcp.TCPSessionCome:
+					case *protodefine.TCPSessionCome:
 						fmt.Println("收到了无意义的TCPSessionCome报文")
-					case *bs_tcp.TCPSessionClose:
+					case *protodefine.TCPSessionClose:
 						fmt.Println("收到了无意义的TCPSessionCome报文")
-					case *bs_tcp.TCPTransferMsg:
-						if data.DataKindId != uint32(bs_types.CMDKindId_IDKindRouter) {
+					case *protodefine.TCPTransferMsg:
+						if data.DataKindId != uint32(protodefine.CMDKindId_IDKindRouter) {
 							break //跳出当前的case
 						}
 						//先把TCPTransferMsg转成RouterTransferData再传给PoolToLogicChannel
 						//因为从router app来的有用报文只有RouterTransferData
-						var pRouterTran *bs_router.RouterTransferData = nil
+						var pRouterTran *protodefine.RouterTransferData = nil
 						switch data.DataSubId {
-						case uint32(bs_router.CMDID_Router_IDRegisterAppRsp):
-							msg := new(bs_router.RegisterAppRsp)
+						case uint32(protodefine.CMDID_Router_IDRegisterAppRsp):
+							msg := new(protodefine.RegisterAppRsp)
 							err := proto.Unmarshal(data.Data, msg)
 							if err != nil {
 								break
 							}
 							fmt.Println("收到注册回复，RegResult=", msg.RegResult)
-						case uint32(bs_router.CMDID_Router_IDTransferData):
-							pRouterTran = new(bs_router.RouterTransferData)
+						case uint32(protodefine.CMDID_Router_IDTransferDataRt):
+							pRouterTran = new(protodefine.RouterTransferData)
 							err := proto.Unmarshal(data.Data, pRouterTran)
 							if err != nil {
 								break
@@ -242,10 +239,10 @@ func (this *SingleMsgPool) PushMsg(req proto.Message, nMs uint64) {
 func (this *SingleMsgPool) SendMsgToClientByNetAgent(req proto.Message) {
 	if this.bindingNetAgent != nil {
 		switch data := req.(type) {
-		case *bs_tcp.TCPTransferMsg:
+		case *protodefine.TCPTransferMsg:
 			this.bindingNetAgent.SendMsg(data)
-		case *bs_tcp.TCPSessionKick:
-			sess := ListenManager.GetSessionByConnId(data.Base.ConnId)
+		case *protodefine.TCPSessionKick:
+			sess := GetSessionByConnId(data.Base.ConnId)
 			if sess != nil && atomic.LoadInt32(&(sess.IsSendKickMsg)) == 0 { //原子操作
 				go sess.CloseSession(this.NetToLogicChannel) //关闭此session
 			}
@@ -258,20 +255,20 @@ func (this *SingleMsgPool) SendMsgToClientByNetAgent(req proto.Message) {
 func (this *SingleMsgPool) SendMsgToServerAppByRouter(req proto.Message) {
 	if this.bindingRouterAgent != nil {
 		switch data := req.(type) {
-		case *bs_tcp.TCPTransferMsg:
+		case *protodefine.TCPTransferMsg:
 			this.bindingRouterAgent.SendMsg(data)
-		case *bs_router.RouterTransferData:
+		case *protodefine.RouterTransferData:
 			//先把RouterTransferData转成TCPTransferMsg再发送
 			buff, err := proto.Marshal(data)
 			if err != nil {
 				break
 			}
-			tcpTran := new(bs_tcp.TCPTransferMsg)
-			bs_proto.SetBaseKindAndSubId(tcpTran)
-			bs_proto.CopyBaseExceptKindAndSubId(tcpTran.Base, data.Base)
+			tcpTran := new(protodefine.TCPTransferMsg)
+			protodefine.SetBaseKindAndSubId(tcpTran)
+			protodefine.CopyBaseExceptKindAndSubId(tcpTran.Base, data.Base)
 			tcpTran.Data = buff
-			tcpTran.DataKindId = uint32(bs_types.CMDKindId_IDKindRouter)
-			tcpTran.DataSubId = uint32(bs_router.CMDID_Router_IDTransferData)
+			tcpTran.DataKindId = uint32(protodefine.CMDKindId_IDKindRouter)
+			tcpTran.DataSubId = uint32(protodefine.CMDID_Router_IDTransferDataRt)
 			this.bindingRouterAgent.SendMsg(tcpTran)
 		default:
 			fmt.Println("不处理TCPTransferMsg和RouterTransferData以外的报文")
